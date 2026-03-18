@@ -175,7 +175,7 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
 
         # log and plot
         self.logger.log_data(self.current, self.desired)
-        #self.logger.update_plot(self.time)
+        self.logger.update_plot(self.time)
 
         self.time += 1
 
@@ -282,3 +282,4 @@ if __name__ == "__main__":
                                  [1.,  0., 0.5],
                                  [0.,  0., 1. ])
     viewer.run()
+    
