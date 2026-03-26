@@ -3,29 +3,30 @@ import casadi as cs
 
 class Ismpc:
   def __init__(self, initial, footstep_planner, params):
-    # parameters
+    # Parametri originali
     self.params = params
-    self.N = params['N']
+    self.N = params['N'] # Orizzonte temporale (es. 100)
+    self.N_f = 3         # Numero di passi ottimizzati richiesto
     self.delta = params['world_time_step']
     self.h = params['h']
     self.eta = params['eta']
     self.foot_size = params['foot_size']
     self.initial = initial
     self.footstep_planner = footstep_planner
-    self.sigma = lambda t, t0, t1: np.clip((t - t0) / (t1 - t0), 0, 1) # piecewise linear sigmoidal function
+    self.sigma = lambda t, t0, t1: np.clip((t - t0) / (t1 - t0), 0, 1)
 
-    # lip model matrices
+    # Matrici modello LIP
     self.A_lip = np.array([[0, 1, 0], [self.eta**2, 0, -self.eta**2], [0, 0, 0]])
     self.B_lip = np.array([[0], [0], [1]])
 
-    # dynamics
+    # Dinamica
     self.f = lambda x, u: cs.vertcat(
       self.A_lip @ x[0:3] + self.B_lip @ u[0],
       self.A_lip @ x[3:6] + self.B_lip @ u[1],
       self.A_lip @ x[6:9] + self.B_lip @ u[2] + np.array([0, - params['g'], 0]),
     )
 
-    # optimization problem
+    # Definizione problema di ottimizzazione
     self.opt = cs.Opti('conic')
     p_opts = {"expand": True}
     s_opts = {"max_iter": 1000, "verbose": False}
@@ -33,52 +34,55 @@ class Ismpc:
 
     self.U = self.opt.variable(3, self.N)
     self.X = self.opt.variable(9, self.N + 1)
+    
+    # MODIFICA: F ottimizza solo i prossimi 3 passi
+    self.F = self.opt.variable(2, self.N_f) 
 
+    self.ref_x_param = self.opt.parameter(self.N)
+    self.ref_y_param = self.opt.parameter(self.N)
     self.x0_param = self.opt.parameter(9)
-    self.zmp_x_mid_param = self.opt.parameter(self.N)
-    self.zmp_y_mid_param = self.opt.parameter(self.N)
     self.zmp_z_mid_param = self.opt.parameter(self.N)
-    #new variable
-    self.zmp_margin_param = self.opt.parameter(self.N)
 
+    # Vincoli di dinamica su tutto l'orizzonte N
     for i in range(self.N):
       self.opt.subject_to(self.X[:, i + 1] == self.X[:, i] + self.delta * self.f(self.X[:, i], self.U[:, i]))
 
-    cost = cs.sumsqr(self.U) + \
-           100 * cs.sumsqr(self.X[2, 1:].T - self.zmp_x_mid_param) + \
-           100 * cs.sumsqr(self.X[5, 1:].T - self.zmp_y_mid_param) + \
-           100 * cs.sumsqr(self.X[8, 1:].T - self.zmp_z_mid_param)
+    # FUNZIONE DI COSTO
+    # Per i primi 3 passi seguiamo le variabili F, per il resto i riferimenti fissi
+    cost = cs.sumsqr(self.U)
+    for i in range(self.N):
+        if i < self.N_f:
+            cost += 100 * cs.sumsqr(self.X[2, i+1] - self.F[0, i])
+            cost += 100 * cs.sumsqr(self.X[5, i+1] - self.F[1, i])
+        else:
+            cost += 100 * cs.sumsqr(self.X[2, i+1] - self.ref_x_param[i])
+            cost += 100 * cs.sumsqr(self.X[5, i+1] - self.ref_y_param[i])
+    
+    cost += 100 * cs.sumsqr(self.X[8, 1:].T - self.zmp_z_mid_param)
+    
+    # Manteniamo i passi ottimizzati vicini alla pianificazione originale
+    cost += 100 * cs.sumsqr(self.F[0, :] - self.ref_x_param[:self.N_f].T)
+    cost += 100 * cs.sumsqr(self.F[1, :] - self.ref_y_param[:self.N_f].T)
 
     self.opt.minimize(cost)
 
-    # zmp constraints
-    #self.opt.subject_to(self.X[2, 1:].T <= self.zmp_x_mid_param + self.foot_size / 2.)
-    #self.opt.subject_to(self.X[2, 1:].T >= self.zmp_x_mid_param - self.foot_size / 2.)
-    #self.opt.subject_to(self.X[5, 1:].T <= self.zmp_y_mid_param + self.foot_size / 2.)
-    #self.opt.subject_to(self.X[5, 1:].T >= self.zmp_y_mid_param - self.foot_size / 2.)
-    #self.opt.subject_to(self.X[8, 1:].T <= self.zmp_z_mid_param + self.foot_size / 2.)
-    #self.opt.subject_to(self.X[8, 1:].T >= self.zmp_z_mid_param - self.foot_size / 2.)
-    
-    # Vincoli ZMP corretti (Centro + Margine Dinamico)
-    self.opt.subject_to(self.X[2, 1:].T <= self.zmp_x_mid_param + self.zmp_margin_param)
-    self.opt.subject_to(self.X[2, 1:].T >= self.zmp_x_mid_param - self.zmp_margin_param)
-    self.opt.subject_to(self.X[5, 1:].T <= self.zmp_y_mid_param + self.zmp_margin_param)
-    self.opt.subject_to(self.X[5, 1:].T >= self.zmp_y_mid_param - self.zmp_margin_param)
-    self.opt.subject_to(self.X[8, 1:].T <= self.zmp_z_mid_param + self.zmp_margin_param)
-    self.opt.subject_to(self.X[8, 1:].T >= self.zmp_z_mid_param - self.zmp_margin_param)
+    # Vincoli ZMP (Applicati solo ai passi ottimizzati)
+    self.opt.subject_to(self.X[2, 1:self.N_f+1].T <= self.F[0, :].T + self.foot_size / 2.)
+    self.opt.subject_to(self.X[2, 1:self.N_f+1].T >= self.F[0, :].T - self.foot_size / 2.)
+    self.opt.subject_to(self.X[5, 1:self.N_f+1].T <= self.F[1, :].T + self.foot_size / 2.)
+    self.opt.subject_to(self.X[5, 1:self.N_f+1].T >= self.F[1, :].T - self.foot_size / 2.)
 
-    # initial state constraint
+    # Vincolo stato iniziale
     self.opt.subject_to(self.X[:, 0] == self.x0_param)
 
-    # stability constraint with periodic tail
-    self.opt.subject_to(self.X[1, 0     ] + self.eta * (self.X[0, 0     ] - self.X[2, 0     ]) == \
+    # Vincoli di stabilità (Periodic Tail)
+    self.opt.subject_to(self.X[1, 0] + self.eta * (self.X[0, 0] - self.X[2, 0]) == \
                         self.X[1, self.N] + self.eta * (self.X[0, self.N] - self.X[2, self.N]))
-    self.opt.subject_to(self.X[4, 0     ] + self.eta * (self.X[3, 0     ] - self.X[5, 0     ]) == \
+    self.opt.subject_to(self.X[4, 0] + self.eta * (self.X[3, 0] - self.X[5, 0]) == \
                         self.X[4, self.N] + self.eta * (self.X[3, self.N] - self.X[5, self.N]))
-    self.opt.subject_to(self.X[7, 0     ] + self.eta * (self.X[6, 0     ] - self.X[8, 0     ]) == \
+    self.opt.subject_to(self.X[7, 0] + self.eta * (self.X[6, 0] - self.X[8, 0]) == \
                         self.X[7, self.N] + self.eta * (self.X[6, self.N] - self.X[8, self.N]))
 
-    # state
     self.x = np.zeros(9)
     self.lip_state = {'com': {'pos': np.zeros(3), 'vel': np.zeros(3), 'acc': np.zeros(3)},
                       'zmp': {'pos': np.zeros(3), 'vel': np.zeros(3)}}
@@ -89,45 +93,21 @@ class Ismpc:
                        current['com']['pos'][2], current['com']['vel'][2], current['zmp']['pos'][2]])
     
     mc_x, mc_y, mc_z = self.generate_moving_constraint(t)
-    # --- LOGICA DINAMICA PER IL MARGINE ---
-    base_margin = self.foot_size / 2.0
-    phase = self.footstep_planner.get_phase_at_time(t)
-    
-    # Se il robot è in supporto singolo (SS), stringiamo il riferimento 
-    # per forzare lo ZMP al centro del piede (maggiore stabilità)
-    if phase == 'ss':
-      margin_val = base_margin * 0.8  # Più restrittivo
-    else:
-      margin_val = base_margin        # Più permissivo in doppio appoggio
-    
-    # Crea un vettore di N elementi con il valore del margine
-    dynamic_margins = np.full(self.N, margin_val)
 
-    # solve optimization problem
     self.opt.set_value(self.x0_param, self.x)
-    self.opt.set_value(self.zmp_x_mid_param, mc_x)
-    self.opt.set_value(self.zmp_y_mid_param, mc_y)
+    self.opt.set_value(self.ref_x_param, mc_x)
+    self.opt.set_value(self.ref_y_param, mc_y)
     self.opt.set_value(self.zmp_z_mid_param, mc_z)
-    self.opt.set_value(self.zmp_margin_param, dynamic_margins)
-    #sol = self.opt.solve()
 
-    # --- GESTIONE ERRORI CON FALLBACK DINAMICO ---
-    try:
-        sol = self.opt.solve()
-    except RuntimeError:
-        # Se il solutore fallisce (es. spinta esterna), allarghiamo DINAMICAMENTE
-        # il riferimento per permettere al robot di "uscire" un po' dal piede pur di non cadere
-        print(f"Emergenza al tempo {t}: Allargamento margine ZMP")
-        self.opt.set_value(self.zmp_margin_param, np.full(self.N, base_margin + 0.02))
-        sol = self.opt.solve()
+    sol = self.opt.solve()
     
     self.x = sol.value(self.X[:,1])
     self.u = sol.value(self.U[:,0])
    
     self.opt.set_initial(self.U, sol.value(self.U))
     self.opt.set_initial(self.X, sol.value(self.X))
+    self.opt.set_initial(self.F, sol.value(self.F))
 
-    # create output LIP state
     self.lip_state['com']['pos'] = np.array([self.x[0], self.x[3], self.x[6]])
     self.lip_state['com']['vel'] = np.array([self.x[1], self.x[4], self.x[7]])
     self.lip_state['zmp']['pos'] = np.array([self.x[2], self.x[5], self.x[8]])
