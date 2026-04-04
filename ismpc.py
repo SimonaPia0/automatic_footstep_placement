@@ -4,23 +4,15 @@ import copy
 
 class Ismpc:
   def __init__(self, initial, footstep_planner, params):
-<<<<<<< HEAD
     self.params = params
     self.N = params['N']
     self.N_f = 3
-=======
-    # Parametri originali
-    self.params = params
-    self.N = params['N'] # Orizzonte temporale (es. 100)
-    self.N_f = 3         # Numero di passi ottimizzati richiesto
->>>>>>> 469ed38094bd8a14df10e96337f861b3691a5777
     self.delta = params['world_time_step']
     self.h = params['h']
     self.eta = params['eta']
     self.foot_size = params['foot_size']
     self.initial = initial
     self.footstep_planner = footstep_planner
-<<<<<<< HEAD
     
     # Backup plan to maintain step WIDTH
     self.original_plan = copy.deepcopy(self.footstep_planner.plan)
@@ -30,25 +22,12 @@ class Ismpc:
     self.A_lip = np.array([[0, 1, 0], [self.eta**2, 0, -self.eta**2], [0, 0, 0]])
     self.B_lip = np.array([[0], [0], [1]])
 
-=======
-    self.sigma = lambda t, t0, t1: np.clip((t - t0) / (t1 - t0), 0, 1)
-
-    # Matrici modello LIP
-    self.A_lip = np.array([[0, 1, 0], [self.eta**2, 0, -self.eta**2], [0, 0, 0]])
-    self.B_lip = np.array([[0], [0], [1]])
-
-    # Dinamica
->>>>>>> 469ed38094bd8a14df10e96337f861b3691a5777
     self.f = lambda x, u: cs.vertcat(
       self.A_lip @ x[0:3] + self.B_lip * u[0],
       self.A_lip @ x[3:6] + self.B_lip * u[1],
       self.A_lip @ x[6:9] + self.B_lip * u[2] + np.array([[0], [- params['g']], [0]]),
     )
 
-<<<<<<< HEAD
-=======
-    # Definizione problema di ottimizzazione
->>>>>>> 469ed38094bd8a14df10e96337f861b3691a5777
     self.opt = cs.Opti('conic')
     p_opts = {"expand": True}
     s_opts = {"max_iter": 3000, "verbose": False, "adaptive_rho": True} 
@@ -57,7 +36,6 @@ class Ismpc:
     self.U = self.opt.variable(3, self.N)
     self.X = self.opt.variable(9, self.N + 1)
     
-<<<<<<< HEAD
     self.F = self.opt.variable(2, self.N_f) 
     #relax of ZMP constraints 
     self.slack_x = self.opt.variable(self.N)
@@ -79,21 +57,10 @@ class Ismpc:
     init_x = (initial['lfoot']['pos'][3] + initial['rfoot']['pos'][3]) / 2.
     init_y = (initial['lfoot']['pos'][4] + initial['rfoot']['pos'][4]) / 2.
     self.optimized_steps[0] = np.array([init_x, init_y])
-=======
-    # MODIFICA: F ottimizza solo i prossimi 3 passi
-    self.F = self.opt.variable(2, self.N_f) 
 
-    self.ref_x_param = self.opt.parameter(self.N)
-    self.ref_y_param = self.opt.parameter(self.N)
-    self.x0_param = self.opt.parameter(9)
-    self.zmp_z_mid_param = self.opt.parameter(self.N)
->>>>>>> 469ed38094bd8a14df10e96337f861b3691a5777
-
-    # Vincoli di dinamica su tutto l'orizzonte N
     for i in range(self.N):
       self.opt.subject_to(self.X[:, i + 1] == self.X[:, i] + self.delta * self.f(self.X[:, i], self.U[:, i]))
 
-<<<<<<< HEAD
     #we start from the previous step
     mc_x_sym = self.fixed_prev_pos_param[0]
     mc_y_sym = self.fixed_prev_pos_param[1]
@@ -142,37 +109,6 @@ class Ismpc:
 
     self.opt.subject_to(self.X[:, 0] == self.x0_param)
 
-=======
-    # FUNZIONE DI COSTO
-    # Per i primi 3 passi seguiamo le variabili F, per il resto i riferimenti fissi
-    cost = cs.sumsqr(self.U)
-    for i in range(self.N):
-        if i < self.N_f:
-            cost += 100 * cs.sumsqr(self.X[2, i+1] - self.F[0, i])
-            cost += 100 * cs.sumsqr(self.X[5, i+1] - self.F[1, i])
-        else:
-            cost += 100 * cs.sumsqr(self.X[2, i+1] - self.ref_x_param[i])
-            cost += 100 * cs.sumsqr(self.X[5, i+1] - self.ref_y_param[i])
-    
-    cost += 100 * cs.sumsqr(self.X[8, 1:].T - self.zmp_z_mid_param)
-    
-    # Manteniamo i passi ottimizzati vicini alla pianificazione originale
-    cost += 100 * cs.sumsqr(self.F[0, :] - self.ref_x_param[:self.N_f].T)
-    cost += 100 * cs.sumsqr(self.F[1, :] - self.ref_y_param[:self.N_f].T)
-
-    self.opt.minimize(cost)
-
-    # Vincoli ZMP (Applicati solo ai passi ottimizzati)
-    self.opt.subject_to(self.X[2, 1:self.N_f+1].T <= self.F[0, :].T + self.foot_size / 2.)
-    self.opt.subject_to(self.X[2, 1:self.N_f+1].T >= self.F[0, :].T - self.foot_size / 2.)
-    self.opt.subject_to(self.X[5, 1:self.N_f+1].T <= self.F[1, :].T + self.foot_size / 2.)
-    self.opt.subject_to(self.X[5, 1:self.N_f+1].T >= self.F[1, :].T - self.foot_size / 2.)
-
-    # Vincolo stato iniziale
-    self.opt.subject_to(self.X[:, 0] == self.x0_param)
-
-    # Vincoli di stabilità (Periodic Tail)
->>>>>>> 469ed38094bd8a14df10e96337f861b3691a5777
     self.opt.subject_to(self.X[1, 0] + self.eta * (self.X[0, 0] - self.X[2, 0]) == \
                         self.X[1, self.N] + self.eta * (self.X[0, self.N] - self.X[2, self.N]))
     self.opt.subject_to(self.X[4, 0] + self.eta * (self.X[3, 0] - self.X[5, 0]) == \
@@ -189,7 +125,6 @@ class Ismpc:
     self.last_valid_F = np.zeros((2, self.N_f))
 
   def solve(self, current, t):
-<<<<<<< HEAD
     try:
         c_p = np.nan_to_num(current['com']['pos'], nan=0.0, posinf=0.0, neginf=0.0)
         c_v = np.nan_to_num(current['com']['vel'], nan=0.0, posinf=0.0, neginf=0.0)
@@ -256,28 +191,6 @@ class Ismpc:
         self.opt.set_initial(self.slack_y, np.zeros(self.N))
     
     #Convert the self.x vector to a more readable structure
-=======
-    self.x = np.array([current['com']['pos'][0], current['com']['vel'][0], current['zmp']['pos'][0],
-                       current['com']['pos'][1], current['com']['vel'][1], current['zmp']['pos'][1],
-                       current['com']['pos'][2], current['com']['vel'][2], current['zmp']['pos'][2]])
-    
-    mc_x, mc_y, mc_z = self.generate_moving_constraint(t)
-
-    self.opt.set_value(self.x0_param, self.x)
-    self.opt.set_value(self.ref_x_param, mc_x)
-    self.opt.set_value(self.ref_y_param, mc_y)
-    self.opt.set_value(self.zmp_z_mid_param, mc_z)
-
-    sol = self.opt.solve()
-    
-    self.x = sol.value(self.X[:,1])
-    self.u = sol.value(self.U[:,0])
-   
-    self.opt.set_initial(self.U, sol.value(self.U))
-    self.opt.set_initial(self.X, sol.value(self.X))
-    self.opt.set_initial(self.F, sol.value(self.F))
-
->>>>>>> 469ed38094bd8a14df10e96337f861b3691a5777
     self.lip_state['com']['pos'] = np.array([self.x[0], self.x[3], self.x[6]])
     self.lip_state['com']['vel'] = np.array([self.x[1], self.x[4], self.x[7]])
     self.lip_state['zmp']['pos'] = np.array([self.x[2], self.x[5], self.x[8]])
@@ -335,7 +248,6 @@ class Ismpc:
                 nominal_F[0, k] = self.footstep_planner.plan[target_idx]['pos'][0]
                 nominal_F[1, k] = self.footstep_planner.plan[target_idx]['pos'][1]
 
-<<<<<<< HEAD
         #edge management to avoid incomplete arrays in case the plan runs out of steps
         else:
             if k > 0:
@@ -346,6 +258,3 @@ class Ismpc:
     mc_z = np.zeros(self.N)
     
     return fixed_prev_pos, sigma_matrix, nominal_F, lock_mask, mc_z
-=======
-    return mc_x, mc_y, np.zeros(self.N)
->>>>>>> 469ed38094bd8a14df10e96337f861b3691a5777
