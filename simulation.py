@@ -9,19 +9,22 @@ import inverse_dynamics as id
 import filter
 import foot_trajectory_generator as ftg
 from logger import Logger
+import argparse
 
 class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
-    def __init__(self, world, hrp4):
+    def __init__(self, world, hrp4, scene1, scene2):
         super(Hrp4Controller, self).__init__(world)
         self.world = world
         self.hrp4 = hrp4
+        self.scene1 = scene1
+        self.scene2 = scene2
         self.time = 0
         self.params = {
             'g': 9.81,
             'h': 0.72,
             'foot_size': 0.1,
             'step_height': 0.02,
-            'ss_duration': 70,
+            'ss_duration': 50,
             'ds_duration': 30,
             'world_time_step': world.getTimeStep(),
             'first_swing': 'rfoot',
@@ -146,8 +149,46 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
         self.current['com']['vel'][2] = x_flt[7]
         self.current['zmp']['pos'][2] = x_flt[8]
 
+        is_pushed = False
+
+        if self.scene1:
+            # 1. Recupera lo stato attuale del piano dei passi
+            idx = self.footstep_planner.get_step_index_at_time(self.time)
+            phase = self.footstep_planner.get_phase_at_time(self.time)
+            start_time_passo = self.footstep_planner.get_start_time(idx)
+
+            # 2. Rileva l'istante esatto dell'inizio SS (es. al passo 5)
+            if (self.time == start_time_passo) and (phase == 'ss') and (idx == 5):
+                self.push_active_timer = 150  # L'MPC resterà "morbido" per 1.5 secondi
+                self.force_duration = 3       # La spinta fisica dura solo 0.03 secondi
+
+            # 3. Coordinazione is_pushed
+            # Inizializziamo a False se non esiste ancora il timer
+            is_pushed = hasattr(self, 'push_active_timer') and self.push_active_timer > 0
+
+            # 4. Applicazione della Forza Fisica
+            if hasattr(self, 'force_duration') and self.force_duration > 0:
+                force = np.array([150.0, 0.0, 0.0]) # Spinta di 150N
+                self.base.addExtForce(force)
+                self.force_duration -= 1
+
+            # 5. Decremento del timer MPC
+            if is_pushed:
+                self.push_active_timer -= 1
+
+        if self.scene2:
+            dt = self.params['world_time_step']
+            push_duration = 0.1
+            force_start_time = int(3.2 / dt)
+            force_end_time = int((3.2 + push_duration) / dt)
+
+            if force_start_time <= self.time <= force_end_time:
+                push_force = np.array([15.0, 10.0, 0.0])
+                self.torso.addExtForce(push_force)
+                is_pushed = True
+
         # get references using mpc
-        lip_state, contact = self.mpc.solve(self.current, self.time)
+        lip_state, contact = self.mpc.solve(self.current, self.time, push_active=is_pushed)
 
         self.desired['com']['pos'] = lip_state['com']['pos']
         self.desired['com']['vel'] = lip_state['com']['vel']
@@ -204,13 +245,13 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
 
         # compute total contact force
         force = np.zeros(3)
-        for contact in world.getLastCollisionResult().getContacts():
+        for contact in self.world.getLastCollisionResult().getContacts():
             force += contact.force
 
         # compute zmp
         zmp = np.zeros(3)
         zmp[2] = com_position[2] - force[2] / (self.hrp4.getMass() * self.params['g'] / self.params['h'])
-        for contact in world.getLastCollisionResult().getContacts():
+        for contact in self.world.getLastCollisionResult().getContacts():
             if contact.force[2] <= 0.1: continue
             zmp[0] += (contact.point[0] * contact.force[2] / force[2] + (zmp[2] - contact.point[2]) * contact.force[0] / force[2])
             zmp[1] += (contact.point[1] * contact.force[2] / force[2] + (zmp[2] - contact.point[2]) * contact.force[1] / force[2])
@@ -219,7 +260,7 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
             zmp = np.array([0., 0., 0.]) # FIXME: this should return previous measurement
         else:
             # sometimes we get contact points that dont make sense, so we clip the ZMP close to the robot
-            midpoint = (l_foot_position + l_foot_position) / 2.
+            midpoint = (l_foot_position + r_foot_position) / 2.
             zmp[0] = np.clip(zmp[0], midpoint[0] - 0.3, midpoint[0] + 0.3)
             zmp[1] = np.clip(zmp[1], midpoint[1] - 0.3, midpoint[1] + 0.3)
             zmp[2] = np.clip(zmp[2], midpoint[2] - 0.3, midpoint[2] + 0.3)
@@ -249,7 +290,7 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
                       'acc': np.zeros(3)}
         }
 
-if __name__ == "__main__":
+def main():
     world = dart.simulation.World()
 
     urdfParser = dart.utils.DartLoader()
@@ -268,7 +309,19 @@ if __name__ == "__main__":
             body.setMass(1e-8)
             body.setInertia(default_inertia)
 
-    node = Hrp4Controller(world, hrp4)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', '--scene', type=int)
+
+    args = parser.parse_args()
+
+    if args.scene == 1:
+        scene1 = True
+        scene2 = False
+    else:
+        scene1 = False
+        scene2 = True
+
+    node = Hrp4Controller(world, hrp4, scene1, scene2)
 
     # create world node and add it to viewer
     viewer = dart.gui.osg.Viewer()
@@ -282,4 +335,7 @@ if __name__ == "__main__":
                                  [1.,  0., 0.5],
                                  [0.,  0., 1. ])
     viewer.run()
+
+if __name__ == "__main__":
+    main()
     
