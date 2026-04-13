@@ -9,6 +9,10 @@ class Logger():
                 self.log['desired', item, level] = []
                 self.log['current', item, level] = []
 
+        # In logger.py
+        self.log['original_foot', 'lfoot', 'pos'] = []
+        self.log['original_foot', 'rfoot', 'pos'] = []
+
 
     def log_data(self, desired, current):
         for item in desired.keys():
@@ -32,6 +36,13 @@ class Logger():
             {'axis': 2, 'batch': 'desired', 'item': 'zmp', 'level': 'pos', 'dim': 2, 'color': 'green', 'style': '-' },
             {'axis': 2, 'batch': 'current', 'item': 'zmp', 'level': 'pos', 'dim': 2, 'color': 'green', 'style': '--'},
         ]
+
+        self.plot_info.extend([
+            {'axis': 3, 'batch': 'original_foot', 'item': 'lfoot', 'level': 'pos', 'dim': 1, 'color': 'red', 'style': ':'},
+            {'axis': 3, 'batch': 'desired',       'item': 'lfoot', 'level': 'pos', 'dim': 1, 'color': 'red', 'style': '-'},
+            {'axis': 3, 'batch': 'original_foot', 'item': 'rfoot', 'level': 'pos', 'dim': 1, 'color': 'blue', 'style': ':'},
+            {'axis': 3, 'batch': 'desired',       'item': 'rfoot', 'level': 'pos', 'dim': 1, 'color': 'blue', 'style': '-'},
+        ])
 
         plot_num = np.max([item['axis'] for item in self.plot_info]) + 1
         self.fig, self.ax = plt.subplots(plot_num, 1, figsize=(6, 8))

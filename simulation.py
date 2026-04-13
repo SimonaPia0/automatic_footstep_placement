@@ -214,6 +214,21 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
         for i in range(self.params['dof'] - 6):
             self.hrp4.setCommand(i + 6, commands[i])
 
+        # In simulation.py, dentro customPreStep alla fine
+        idx = self.footstep_planner.get_step_index_at_time(self.time)
+        orig_step = self.mpc.original_plan[idx]
+        target_foot = orig_step['foot_id'] # Identifica quale piede è nel piano originale
+
+        for foot in ['lfoot', 'rfoot']:
+            if foot == target_foot:
+                # Registriamo la posizione del piede pianificato per questo step
+                self.logger.log['original_foot', foot, 'pos'].append(orig_step['pos'])
+            else:
+                # Per l'altro piede (quello fermo), registriamo la posizione del passo precedente
+                # o semplicemente manteniamo la coerenza nel grafico
+                prev_idx = max(0, idx - 1)
+                self.logger.log['original_foot', foot, 'pos'].append(self.mpc.original_plan[prev_idx]['pos'])
+
         # log and plot
         self.logger.log_data(self.current, self.desired)
         self.logger.update_plot(self.time)
@@ -317,9 +332,12 @@ def main():
     if args.scene == 1:
         scene1 = True
         scene2 = False
-    else:
+    elif args.scene == 2:
         scene1 = False
         scene2 = True
+    else:
+        scene1 = False
+        scene2 = False
 
     node = Hrp4Controller(world, hrp4, scene1, scene2)
 
