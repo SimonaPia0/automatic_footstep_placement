@@ -12,12 +12,14 @@ from logger import Logger
 import argparse
 
 class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
-    def __init__(self, world, hrp4, scene1, scene2):
+    def __init__(self, world, hrp4, scene1, scene2,traj1,traj2):
         super(Hrp4Controller, self).__init__(world)
         self.world = world
         self.hrp4 = hrp4
         self.scene1 = scene1
         self.scene2 = scene2
+        self.traj1 = traj1
+        self.traj2 = traj2
         self.time = 0
         self.params = {
             'g': 9.81,
@@ -80,13 +82,20 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
         self.id = id.InverseDynamics(self.hrp4, redundant_dofs)
 
         # initialize footstep planner
-        reference = [(0.1, 0., 0.2)] * 5 + [(0.1, 0., -0.1)] * 10 + [(0.1, 0., 0.)] * 10
+        if self.traj1:
+             reference = [(0.1, 0.0, 0.0)] * 25
+        
+        if self.traj2:
+            reference = [(0.1, 0., 0.2)] * 5 + [(0.1, 0., -0.1)] * 10 + [(0.1, 0., 0.)] * 10
+
+
         self.footstep_planner = footstep_planner.FootstepPlanner(
             reference,
             self.initial['lfoot']['pos'],
             self.initial['rfoot']['pos'],
             self.params
             )
+
 
         # initialize MPC controller
         self.mpc = ismpc.Ismpc(
@@ -186,6 +195,8 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
                 push_force = np.array([15.0, 10.0, 0.0])
                 self.torso.addExtForce(push_force)
                 is_pushed = True
+        
+
 
         # get references using mpc
         lip_state, contact = self.mpc.solve(self.current, self.time, push_active=is_pushed)
@@ -311,17 +322,25 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--scene', type=int)
+    parser.add_argument('-t', '--traj', type=int )
 
     args = parser.parse_args()
 
     if args.scene == 1:
         scene1 = True
         scene2 = False
-    else:
+    elif args.scene == 2:
         scene1 = False
         scene2 = True
+    if args.traj == 1:
+        traj1 = True
+        traj2 = False
+    else:
+        traj1 = False
+        traj2 = True
 
-    node = Hrp4Controller(world, hrp4, scene1, scene2)
+    
+    node = Hrp4Controller(world, hrp4, scene1, scene2,traj1,traj2)
 
     # create world node and add it to viewer
     viewer = dart.gui.osg.Viewer()
@@ -338,4 +357,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
