@@ -35,14 +35,10 @@ class Logger():
             {'axis': 2, 'batch': 'current', 'item': 'com', 'level': 'pos', 'dim': 2, 'color': 'blue' , 'style': '--'},
             {'axis': 2, 'batch': 'desired', 'item': 'zmp', 'level': 'pos', 'dim': 2, 'color': 'green', 'style': '-' },
             {'axis': 2, 'batch': 'current', 'item': 'zmp', 'level': 'pos', 'dim': 2, 'color': 'green', 'style': '--'},
+            
         ]
 
-        self.plot_info.extend([
-            {'axis': 3, 'batch': 'original_foot', 'item': 'lfoot', 'level': 'pos', 'dim': 1, 'color': 'red', 'style': ':'},
-            {'axis': 3, 'batch': 'desired',       'item': 'lfoot', 'level': 'pos', 'dim': 1, 'color': 'red', 'style': '-'},
-            {'axis': 3, 'batch': 'original_foot', 'item': 'rfoot', 'level': 'pos', 'dim': 1, 'color': 'blue', 'style': ':'},
-            {'axis': 3, 'batch': 'desired',       'item': 'rfoot', 'level': 'pos', 'dim': 1, 'color': 'blue', 'style': '-'},
-        ])
+        
 
         plot_num = np.max([item['axis'] for item in self.plot_info]) + 1
         self.fig, self.ax = plt.subplots(plot_num, 1, figsize=(6, 8))
@@ -51,6 +47,25 @@ class Logger():
         for item in self.plot_info:
             key = item['batch'], item['item'], item['level'], item['dim']
             self.lines[key], = self.ax[item['axis']].plot([], [], color=item['color'], linestyle=item['style'])
+
+        # Creazione Finestra 2 (Piano XY)
+        self.fig_xy, self.ax_xy = plt.subplots(figsize=(7, 7))
+        self.fig_xy.canvas.manager.set_window_title('Piano XY (Top-Down)')
+        self.line_com_xy, = self.ax_xy.plot([], [], color='red', label='CoM', linewidth=1.5)
+        self.line_zmp_xy, = self.ax_xy.plot([], [], color='black', label='ZMP', linewidth=0.8)
+        self.line_com_orig_xy, = self.ax_xy.plot([], [], color='blue', linestyle='--', linewidth=1, alpha=0.6, label='CoM Originale')
+        self.ax_xy.set_aspect('equal')
+        self.ax_xy.set_xlabel('X [m]')
+        self.ax_xy.set_ylabel('Y [m]')
+        #self.ax_xy.legend()
+        # In logger.py -> initialize_plot
+        from matplotlib.lines import Line2D
+        custom_lines = [Line2D([0], [0], color='red', lw=1.5),
+                        Line2D([0], [0], color='black', lw=0.8),
+                        Line2D([0], [0], color='gray', lw=1.2),
+                        Line2D([0], [0], color='blue', lw=1, linestyle='--')]
+        self.ax_xy.legend(custom_lines, ['CoM', 'ZMP', 'Passi Attuali', 'Passi Originali'])
+        self.ax_xy.grid(True, alpha=0.3)
         
         plt.ion()
         plt.show()
@@ -69,7 +84,28 @@ class Logger():
         for i in range(len(self.ax)):
             self.ax[i].relim()
             self.ax[i].autoscale_view()
+        
+        # Update Finestra 2 (XY)
+        com_data = np.array(self.log['current', 'com', 'pos']).T
+        zmp_data = np.array(self.log['current', 'zmp', 'pos']).T
+        if com_data.size > 0:
+            self.line_com_xy.set_data(com_data[0], com_data[1])
+        if zmp_data.size > 0:
+            self.line_zmp_xy.set_data(zmp_data[0], zmp_data[1])
+        
+        
+        # Update scia blu CoM Originale (AGGIUNTO QUI SOTTO)
+        if ('desired', 'com_pure', 'pos') in self.log:
+            com_pure_data = np.array(self.log['desired', 'com_pure', 'pos']).T
+            if com_pure_data.size > 0:
+                self.line_com_orig_xy.set_data(com_pure_data[0], com_pure_data[1])
+        
+
+        self.ax_xy.relim()
+        self.ax_xy.autoscale_view()
             
         # redraw the plot
         self.fig.canvas.draw()
+        self.fig_xy.canvas.draw()
         self.fig.canvas.flush_events()
+        self.fig_xy.canvas.flush_events()

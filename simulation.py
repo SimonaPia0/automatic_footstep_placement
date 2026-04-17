@@ -135,6 +135,33 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
         # initialize logger and plots
         self.logger = Logger(self.initial)
         self.logger.initialize_plot(frequency=10)
+        # --- AGGIUNTA PER DISEGNO FOOTSTEPS (ORIGINALI E ATTUALI) ---
+        from matplotlib.patches import Rectangle
+        ax_xy = self.logger.ax_xy
+        
+        # 1. Disegna i passi ORIGINALI (quelli nominali di ismpc)
+        # Usiamo il bordo tratteggiato e un'alfa più bassa
+        for step in self.mpc.original_plan:
+            x, y = step['pos'][0], step['pos'][1]
+            theta = step['ang'][2]
+            w, h = 0.20, 0.14
+            rect_orig = Rectangle((x - w/2, y - h/2), w, h, angle=np.rad2deg(theta),
+                                 rotation_point='center', linewidth=1, 
+                                 edgecolor='blue', linestyle='--', facecolor='none', alpha=0.2)
+            ax_xy.add_patch(rect_orig)
+
+        # 2. Disegna i passi ATTUALI (quelli che possono variare)
+        self.step_patches = [] # <--- NUOVA LISTA PER SALVARE I RETTANGOLI
+        for step in self.footstep_planner.plan:
+            x, y = step['pos'][0], step['pos'][1]
+            theta = step['ang'][2]
+            w, h = 0.20, 0.14
+            rect_curr = Rectangle((x - w/2, y - h/2), w, h, angle=np.rad2deg(theta),
+                                 rotation_point='center', linewidth=1.2, 
+                                 edgecolor='gray', facecolor='none', alpha=0.5)
+            ax_xy.add_patch(rect_curr)
+            self.step_patches.append(rect_curr) # <--- SALVIAMO IL RIFERIMENTO
+        # -----------------------------------------------------------
         
     def customPreStep(self):
         # create current and desired states
@@ -196,6 +223,10 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
                 self.torso.addExtForce(push_force)
                 is_pushed = True
         
+        # Salviamo il CoM originale/desiderato PRIMA dell'MPC
+        self.logger.log['desired', 'com_pure', 'pos'] = self.logger.log.get(('desired', 'com_pure', 'pos'), [])
+        self.logger.log['desired', 'com_pure', 'pos'].append(copy.deepcopy(self.desired['com']['pos']))
+        
 
 
         # get references using mpc
@@ -239,6 +270,17 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
                 # o semplicemente manteniamo la coerenza nel grafico
                 prev_idx = max(0, idx - 1)
                 self.logger.log['original_foot', foot, 'pos'].append(self.mpc.original_plan[prev_idx]['pos'])
+
+        # --- AGGIORNA LA POSIZIONE DEI RETTANGOLI GRIGI IN TEMPO REALE ---
+        for i, step in enumerate(self.footstep_planner.plan):
+            if i < len(self.step_patches):
+                x, y = step['pos'][0], step['pos'][1]
+                w, h = 0.20, 0.14
+                
+                # Aggiorniamo le coordinate (x,y) e l'angolo del rettangolo sul grafico
+                self.step_patches[i].set_xy((x - w/2, y - h/2))
+                self.step_patches[i].set_angle(np.rad2deg(step['ang'][2]))
+        # -----------------------------------------------------------------
 
         # log and plot
         self.logger.log_data(self.current, self.desired)
