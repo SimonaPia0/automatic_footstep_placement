@@ -36,7 +36,7 @@ class Ismpc:
     self.weight_f_param = self.opt.parameter()
     self.weight_h_param = self.opt.parameter()
     self.weight_v_param = self.opt.parameter()
-    self.lateral_distance = self.opt.parameter()
+    self.foot_sign_param = self.opt.parameter(self.N_f)
 
     self.U = self.opt.variable(3, self.N)
     self.X = self.opt.variable(9, self.N + 1)
@@ -81,8 +81,14 @@ class Ismpc:
         # ANTI-SPLIT RESTRAINTS (Loose leash for wider strides)
         self.opt.subject_to(self.F[0, k] - self.nominal_F_param[0, k] <= 0.30)  # Fino a 30 cm in avanti
         self.opt.subject_to(self.F[0, k] - self.nominal_F_param[0, k] >= -0.30) # Fino a 30 cm indietro
-        self.opt.subject_to(self.F[1, k] - self.nominal_F_param[1, k] <= 0.20)  # Fino a 20 cm di lato
-        self.opt.subject_to(self.F[1, k] - self.nominal_F_param[1, k] >= self.lateral_distance)
+
+        S = self.foot_sign_param[k]
+        delta_y = self.F[1, k] - self.nominal_F_param[1, k]
+        
+        # Il piede può allargarsi verso l'esterno di max 20 cm
+        self.opt.subject_to(S * delta_y <= 0.20)
+        # Il piede può rientrare verso l'interno di max 3 cm (impedisce l'incrocio!)
+        self.opt.subject_to(S * delta_y >= -0.01)
 
     # --- cost function ---
     cost = 10 * cs.sumsqr(self.U) 
@@ -151,14 +157,12 @@ class Ismpc:
         w_f = 50.0      # Libera i piedi per passi lunghi
         w_h = 100.0     # <--- Valore BASSO: permette flessione ginocchia!
         w_v = 8000.0    # <--- Freno a mano attivato!
-        d_l = 0.02
     else:
         w_f = 5000.0
         w_h = 1e5
         w_v = 0.0
-        d_l = 0.0
 
-    fixed_prev, sigma_matrix, nominal_F, lock_mask, mc_z = self.generate_moving_constraint(t)
+    fixed_prev, sigma_matrix, nominal_F, lock_mask, mc_z, foot_signs = self.generate_moving_constraint(t)
 
     self.opt.set_value(self.x0_param, self.x)
     self.opt.set_value(self.fixed_prev_pos_param, fixed_prev)
@@ -169,7 +173,7 @@ class Ismpc:
     self.opt.set_value(self.weight_f_param, w_f)
     self.opt.set_value(self.weight_h_param, w_h)
     self.opt.set_value(self.weight_v_param, w_v)
-    self.opt.set_value(self.lateral_distance, d_l)
+    self.opt.set_value(self.foot_sign_param, foot_signs)
 
     try:
         #extraction of the solution
@@ -225,58 +229,64 @@ class Ismpc:
     return self.lip_state, contact
   
   def generate_moving_constraint(self, t):
-    idx = self.footstep_planner.get_step_index_at_time(t)
-    phase = self.footstep_planner.get_phase_at_time(t)
-    
-    #determination of the previous fixed foot
-    if idx in self.optimized_steps:
-        fixed_prev_pos = self.optimized_steps[idx]
-    else:
-        fixed_prev_pos = self.footstep_planner.plan[idx]['pos'][:2]
-        self.optimized_steps[idx] = fixed_prev_pos
-    
-    #for every instant of the horizon and for every future step, it says how much that step "contributes"
-    sigma_matrix = np.zeros((self.N, self.N_f))
-    #contains the future nominal steps
-    nominal_F = np.zeros((2, self.N_f))
-    #tells if a step is blocked
-    lock_mask = np.zeros(self.N_f)
-    #future time vector you work on
-    time_array = np.arange(t, t + self.N)
-    
-    # We build the future path by adding the RELATIVE distances to the supporting foot
-    current_nominal_base = fixed_prev_pos.copy()
-    
-    for k in range(self.N_f):
-        target_idx = idx + k + 1
-        if target_idx < len(self.original_plan):
-            fs_start_time = self.footstep_planner.get_start_time(target_idx - 1)
-            ds_start_time = fs_start_time + self.footstep_planner.plan[target_idx - 1]['ss_duration']
-            fs_end_time = ds_start_time + self.footstep_planner.plan[target_idx - 1]['ds_duration']
-            
-            sigma_matrix[:, k] = self.sigma(time_array, ds_start_time, fs_end_time)
-            
-            # Calculating the "Relative Distance" from the original plane
-            rel_step = self.original_plan[target_idx]['pos'][:2] - self.original_plan[target_idx-1]['pos'][:2]
-            current_nominal_base = current_nominal_base + rel_step
-            
-            nominal_F[0, k] = current_nominal_base[0]
-            nominal_F[1, k] = current_nominal_base[1]
-            
-            # LOCK: If it is the step in progress and we are landing on the ground, it is locked
-            if k == 0 and phase == 'ds':
-                lock_mask[k] = 1.0
-                # We force the nominal to match exactly with the actual landed position
-                nominal_F[0, k] = self.footstep_planner.plan[target_idx]['pos'][0]
-                nominal_F[1, k] = self.footstep_planner.plan[target_idx]['pos'][1]
-
-        #edge management to avoid incomplete arrays in case the plan runs out of steps
+        idx = self.footstep_planner.get_step_index_at_time(t)
+        phase = self.footstep_planner.get_phase_at_time(t)
+        
+        # determination of the previous fixed foot
+        if idx in self.optimized_steps:
+            fixed_prev_pos = self.optimized_steps[idx]
         else:
-            if k > 0:
-                nominal_F[:, k] = nominal_F[:, k-1]
-            else:
-                nominal_F[:, k] = fixed_prev_pos
+            fixed_prev_pos = self.footstep_planner.plan[idx]['pos'][:2]
+            self.optimized_steps[idx] = fixed_prev_pos
+        
+        # for every instant of the horizon and for every future step, it says how much that step "contributes"
+        sigma_matrix = np.zeros((self.N, self.N_f))
+        # contains the future nominal steps
+        nominal_F = np.zeros((2, self.N_f))
+        # tells if a step is blocked
+        lock_mask = np.zeros(self.N_f)
+        # future time vector you work on
+        time_array = np.arange(t, t + self.N)
 
-    mc_z = np.zeros(self.N)
-    
-    return fixed_prev_pos, sigma_matrix, nominal_F, lock_mask, mc_z
+        foot_signs = np.zeros(self.N_f)
+        
+        # --- ELIMINATO current_nominal_base ---
+        
+        for k in range(self.N_f):
+            target_idx = idx + k + 1
+            if target_idx < len(self.original_plan):
+                fs_start_time = self.footstep_planner.get_start_time(target_idx - 1)
+                ds_start_time = fs_start_time + self.footstep_planner.plan[target_idx - 1]['ss_duration']
+                fs_end_time = ds_start_time + self.footstep_planner.plan[target_idx - 1]['ds_duration']
+                
+                sigma_matrix[:, k] = self.sigma(time_array, ds_start_time, fs_end_time)
+                
+                # --- MODIFICA CHIAVE: Assegnazione Assoluta ---
+                # Prendiamo direttamente le coordinate X e Y dal piano originale
+                nominal_F[0, k] = self.original_plan[target_idx]['pos'][0]
+                nominal_F[1, k] = self.original_plan[target_idx]['pos'][1]
+
+                if self.original_plan[target_idx]['foot_id'] == 'lfoot':
+                    foot_signs[k] = 1.0   # Sinistro
+                else:
+                    foot_signs[k] = -1.0  # Destro
+                
+                # LOCK: If it is the step in progress and we are landing on the ground, it is locked
+                if k == 0 and phase == 'ds':
+                    lock_mask[k] = 1.0
+                    # We force the nominal to match exactly with the actual landed position
+                    nominal_F[0, k] = self.footstep_planner.plan[target_idx]['pos'][0]
+                    nominal_F[1, k] = self.footstep_planner.plan[target_idx]['pos'][1]
+
+            # edge management to avoid incomplete arrays in case the plan runs out of steps
+            else:
+                if k > 0:
+                    nominal_F[:, k] = nominal_F[:, k-1]
+                    foot_signs[k] = foot_signs[k-1] # Copia il segno precedente
+                else:
+                    nominal_F[:, k] = fixed_prev_pos
+                    foot_signs[k] = 1.0 # Default fallback
+
+        mc_z = np.zeros(self.N)
+        
+        return fixed_prev_pos, sigma_matrix, nominal_F, lock_mask, mc_z, foot_signs

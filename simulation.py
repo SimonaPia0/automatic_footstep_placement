@@ -20,6 +20,7 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
         self.scene2 = scene2
         self.traj1 = traj1
         self.traj2 = traj2
+        self.lateral_push_dir = 0.0
         self.time = 0
         self.params = {
             'g': 9.81,
@@ -213,15 +214,42 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
                 self.push_active_timer -= 1
 
         if self.scene2:
-            dt = self.params['world_time_step']
-            push_duration = 0.1
-            force_start_time = int(3.2 / dt)
-            force_end_time = int((3.2 + push_duration) / dt)
+            # 1. Recupera lo stato attuale del piano dei passi (identico a Scene 1)
+            idx = self.footstep_planner.get_step_index_at_time(self.time)
+            phase = self.footstep_planner.get_phase_at_time(self.time)
+            start_time_passo = self.footstep_planner.get_start_time(idx)
 
-            if force_start_time <= self.time <= force_end_time:
-                push_force = np.array([15.0, 10.0, 0.0])
+            # 2. Trigger: Applica la forza all'inizio della fase SS (es. al passo 5)
+            if (self.time == start_time_passo) and (phase == 'ss') and (idx == 5):
+                # Timer per l'MPC: indica per quanto tempo il controllore deve compensare
+                self.push_active_timer_s2 = 150  
+                # Durata fisica della spinta (0.1 secondi = 10 step se dt=0.01)
+                self.force_duration_s2 = 10       
+
+            # --- LOGICA DINAMICA PER LO SWING ---
+                # Recuperiamo l'ID del piede che deve muoversi in questo step
+                swing_foot = self.footstep_planner.plan[idx]['foot_id']
+                
+                if swing_foot == 'rfoot':
+                    # Se oscilla il destro, spingiamo verso DESTRA (Y negativa)
+                    self.lateral_push_dir = -10.0
+                else:
+                    # Se oscilla il sinistro, spingiamo verso SINISTRA (Y positiva)
+                    self.lateral_push_dir = 10.0
+                # ------------------------------------
+
+            # 3. Verifica se la perturbazione è attiva (per l'MPC)
+            is_pushed = hasattr(self, 'push_active_timer_s2') and self.push_active_timer_s2 > 0
+
+            # 4. Applicazione della Forza Fisica al TORSO (mantenendo i valori della Scene 2)
+            if hasattr(self, 'force_duration_s2') and self.force_duration_s2 > 0:
+                push_force = np.array([15.0, self.lateral_push_dir, 0.0]) # Forza diagonale
                 self.torso.addExtForce(push_force)
-                is_pushed = True
+                self.force_duration_s2 -= 1
+
+            # 5. Decremento del timer per la compensazione MPC
+            if is_pushed:
+                self.push_active_timer_s2 -= 1
         
         # Salviamo il CoM originale/desiderato PRIMA dell'MPC
         self.logger.log['desired', 'com_pure', 'pos'] = self.logger.log.get(('desired', 'com_pure', 'pos'), [])
