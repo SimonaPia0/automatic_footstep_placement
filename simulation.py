@@ -12,12 +12,13 @@ from logger import Logger
 import argparse
 
 class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
-    def __init__(self, world, hrp4, scene1, scene2,traj1,traj2):
+    def __init__(self, world, hrp4, scene1, scene2, scene3, traj1, traj2):
         super(Hrp4Controller, self).__init__(world)
         self.world = world
         self.hrp4 = hrp4
         self.scene1 = scene1
         self.scene2 = scene2
+        self.scene3 = scene3
         self.traj1 = traj1
         self.traj2 = traj2
         self.lateral_push_dir = 0.0
@@ -250,6 +251,45 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
             # 5. Decremento del timer per la compensazione MPC
             if is_pushed:
                 self.push_active_timer_s2 -= 1
+
+        if self.scene3:
+            # Recupera passo corrente
+            idx = self.footstep_planner.get_step_index_at_time(self.time)
+            phase = self.footstep_planner.get_phase_at_time(self.time)
+            start_time_passo = self.footstep_planner.get_start_time(idx)
+
+            # Scegli qui il passo su cui vuoi applicare la perturbazione
+            push_step_idx = 5   # oppure 5, ma deve essere quello reale del video
+
+            # Trigger della spinta: solo all'inizio della single support del passo scelto
+            if (self.time == start_time_passo) and (phase == 'ss') and (idx == push_step_idx):
+                self.push_active_timer_s2 = 150
+                self.force_duration_s2 = 10
+
+                # Piede associato al passo corrente
+                step_foot = self.footstep_planner.plan[idx]['foot_id']
+
+                # Direzione esterna:
+                # lfoot -> +Y
+                # rfoot -> -Y
+                if step_foot == 'lfoot':
+                    self.lateral_push_dir = -20.0
+                elif step_foot == 'rfoot':
+                    self.lateral_push_dir = +20.0
+                else:
+                    self.lateral_push_dir = 0.0
+
+            # L'MPC resta in modalità push per un po'
+            is_pushed = hasattr(self, 'push_active_timer_s2') and self.push_active_timer_s2 > 0
+
+            # La forza fisica dura pochi step
+            if hasattr(self, 'force_duration_s2') and self.force_duration_s2 > 0:
+                push_force = np.array([0.0, self.lateral_push_dir, 0.0])
+                self.torso.addExtForce(push_force)
+                self.force_duration_s2 -= 1
+
+            if is_pushed:
+                self.push_active_timer_s2 -= 1
         
         # Salviamo il CoM originale/desiderato PRIMA dell'MPC
         self.logger.log['desired', 'com_pure', 'pos'] = self.logger.log.get(('desired', 'com_pure', 'pos'), [])
@@ -259,6 +299,20 @@ class Hrp4Controller(dart.gui.osg.RealTimeWorldNode):
 
         # get references using mpc
         lip_state, contact = self.mpc.solve(self.current, self.time, push_active=is_pushed)
+
+        if is_pushed:
+            idx_corr = self.footstep_planner.get_step_index_at_time(self.time)
+            target_idx_corr = idx_corr + 1
+            
+            if target_idx_corr < len(self.footstep_planner.plan):
+                piede_in_arrivo = self.footstep_planner.plan[target_idx_corr]['foot_id']
+                nom_y = self.mpc.original_plan[target_idx_corr]['pos'][1] 
+                curr_y = self.footstep_planner.plan[target_idx_corr]['pos'][1]
+                spostamento_y = curr_y - nom_y
+                
+                print(f"[MPC RISOLTO] t={self.time} | Piede: {piede_in_arrivo} | "
+                      f"Nominale: {nom_y:.4f} m -> Attuale: {curr_y:.4f} m | "
+                      f"Spostamento: {spostamento_y:.4f} m")
 
         self.desired['com']['pos'] = lip_state['com']['pos']
         self.desired['com']['vel'] = lip_state['com']['vel']
@@ -414,12 +468,19 @@ def main():
     if args.scene == 1:
         scene1 = True
         scene2 = False
+        scene3 = False
     elif args.scene == 2:
         scene1 = False
         scene2 = True
+        scene3 = False
+    elif args.scene == 3:
+        scene1 = False
+        scene2 = False
+        scene3 = True
     else:
         scene1 = False
         scene2 = False
+        scene3 = False
         
     if args.traj == 1:
         traj1 = True
@@ -429,7 +490,7 @@ def main():
         traj2 = True
 
     
-    node = Hrp4Controller(world, hrp4, scene1, scene2,traj1,traj2)
+    node = Hrp4Controller(world, hrp4, scene1, scene2, scene3, traj1, traj2)
 
     # create world node and add it to viewer
     viewer = dart.gui.osg.Viewer()
