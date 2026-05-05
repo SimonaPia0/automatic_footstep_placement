@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -12,6 +13,7 @@ class Logger():
         # In logger.py
         self.log['original_foot', 'lfoot', 'pos'] = []
         self.log['original_foot', 'rfoot', 'pos'] = []
+        self.video_writer = None
 
 
     def log_data(self, desired, current):
@@ -20,8 +22,9 @@ class Logger():
                 self.log['desired', item, level].append(desired[item][level])
                 self.log['current', item, level].append(current[item][level])
 
-    def initialize_plot(self, frequency=1):
+    def initialize_plot(self, frequency=1, save_video=False):
         self.frequency = frequency
+        self.save_video = save_video
         self.plot_info = [
             {'axis': 0, 'batch': 'desired', 'item': 'com', 'level': 'pos', 'dim': 0, 'color': 'blue' , 'style': '-' },
             {'axis': 0, 'batch': 'current', 'item': 'com', 'level': 'pos', 'dim': 0, 'color': 'blue' , 'style': '--'},
@@ -70,6 +73,25 @@ class Logger():
         plt.ion()
         plt.show()
 
+        # In logger.py -> initialize_plot
+        if self.save_video:
+            # Forza un rendering per essere sicuri delle dimensioni finali
+            self.fig_xy.canvas.draw()
+            
+            # Prendi le dimensioni del buffer (che sono quelle reali dei pixel)
+            # NOTA: Usiamo il buffer perché tiene conto del DPI dello schermo
+            rgba_buffer = self.fig_xy.canvas.buffer_rgba()
+            img_shape = np.asarray(rgba_buffer).shape # Sarà (altezza, larghezza, 4)
+            
+            self.video_size = (img_shape[1], img_shape[0]) # OpenCV vuole (larghezza, altezza)
+
+            self.video_writer = cv2.VideoWriter(
+                'piano_xy_tracking.mp4',
+                cv2.VideoWriter_fourcc(*'mp4v'),
+                10,
+                self.video_size
+            )
+
     def update_plot(self, time):
         if time % self.frequency != 0:
             return
@@ -109,3 +131,22 @@ class Logger():
         self.fig_xy.canvas.draw()
         self.fig.canvas.flush_events()
         self.fig_xy.canvas.flush_events()
+
+        # In logger.py -> update_plot
+        if self.video_writer is not None:
+            self.fig_xy.canvas.draw()
+            img = np.asarray(self.fig_xy.canvas.buffer_rgba())
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+
+            # Se per qualche motivo il backend ha cambiato dimensione (es. DPI scaling)
+            # facciamo un resize al volo per non far crashare FFmpeg
+            if (img_bgr.shape[1], img_bgr.shape[0]) != self.video_size:
+                img_bgr = cv2.resize(img_bgr, self.video_size)
+
+            self.video_writer.write(img_bgr)
+
+    # Aggiungi questo metodo per chiudere il file correttamente
+    def close_video(self):
+        if self.video_writer is not None:
+            self.video_writer.release()
+            print("Video salvato correttamente.")

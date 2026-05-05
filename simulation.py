@@ -481,7 +481,8 @@ def main():
         scene1 = False
         scene2 = False
         scene3 = False
-        
+
+     
     if args.traj == 1:
         traj1 = True
         traj2 = False
@@ -490,7 +491,7 @@ def main():
         traj2 = True
 
     
-    node = Hrp4Controller(world, hrp4, scene1, scene2, scene3, traj1, traj2)
+    node = Hrp4Controller(world, hrp4, scene1, scene2,scene3,traj1,traj2)
 
     # create world node and add it to viewer
     viewer = dart.gui.osg.Viewer()
@@ -503,7 +504,10 @@ def main():
     viewer.setCameraHomePosition([5., -1., 1.5],
                                  [1.,  0., 0.5],
                                  [0.,  0., 1. ])
-    viewer.run()
+    try:
+        viewer.run()
+    finally:
+        node.logger.close_video()
 
 if __name__ == "__main__":
     main()
